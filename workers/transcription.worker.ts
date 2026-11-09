@@ -72,7 +72,7 @@ import {
   type CtcTokenizerLike,
   type CtcVocab,
 } from "@/lib/forcedAlign";
-import type { TranscriptLanguage } from "@/lib/languages";
+import { isTranscriptLanguage, type TranscriptLanguage } from "@/lib/languages";
 import {
   VAD_FRAME_SIZE,
   VAD_SAMPLE_RATE,
@@ -1205,24 +1205,109 @@ async function runParakeet(
   return finishWithDiarization(words, audio);
 }
 
+/** Whisper's 30 s window — the most the model can hear in one detection pass. */
+const DETECT_WINDOW_SAMPLES = 30 * VAD_SAMPLE_RATE;
+
+/**
+ * Resolve the `"auto"` transcript language from the audio itself.
+ *
+ * transformers.js has no language detection (`_retrieve_init_tokens` silently
+ * defaults to English), so do what upstream Whisper's detect_language does:
+ * feed the opening audio to the encoder with only the `<|startoftranscript|>`
+ * decoder prefix and take the argmax over the generation config's language
+ * tokens — restricting the argmax to that set keeps a timestamp or EOS token
+ * from winning the vote. Returns a concrete language; `"en"` when detection
+ * fails or hears a language this editor does not support.
+ */
+async function detectTranscriptLanguage(
+  transcriber: AutomaticSpeechRecognitionPipeline,
+  audio: Float32Array,
+  speechSegments: SpeechSegment[]
+): Promise<TranscriptLanguage> {
+  try {
+    // Vote from the first speech so lead-in music or silence doesn't skew it;
+    // the processor pads/truncates to the 30 s window either way.
+    const start = speechSegments[0]?.startSample ?? 0;
+    const slice = audio.slice(start, start + DETECT_WINDOW_SAMPLES);
+    const features = await transcriber.processor(slice);
+
+    // The pipeline types are loose about the generation config; narrow locally.
+    const generation = (
+      transcriber.model as unknown as {
+        generation_config?: {
+          decoder_start_token_id?: number;
+          lang_to_id?: Record<string, number>;
+        };
+      }
+    ).generation_config;
+    const sot = generation?.decoder_start_token_id;
+    const langToId = generation?.lang_to_id;
+    if (typeof sot !== "number" || !langToId) return "en";
+
+    const out = await transcriber.model.forward({
+      input_features: features.input_features,
+      decoder_input_ids: new Tensor(
+        "int64",
+        BigInt64Array.from([BigInt(sot)]),
+        [1, 1]
+      ),
+    });
+    // logits: [batch, sequence, vocab] — position 0 carries the language vote.
+    const scores = out.logits.data as Float32Array;
+    let bestToken: string | null = null;
+    let bestScore = -Infinity;
+    for (const [token, id] of Object.entries(langToId)) {
+      if (id < 0 || id >= scores.length) continue;
+      if (scores[id] > bestScore) {
+        bestScore = scores[id];
+        bestToken = token;
+      }
+    }
+    const code =
+      bestToken?.replace(/^<\|/, "").replace(/\|>$/, "") ?? "";
+    return isTranscriptLanguage(code) && code !== "auto" ? code : "en";
+  } catch (err) {
+    console.warn("Language detection failed; falling back to English.", err);
+    return "en";
+  }
+}
+
 async function runWhisper(
   audio: Float32Array,
   duration: number,
   choice: WhisperModel,
-  transcriptLanguage: TranscriptLanguage
+  requestedLanguage: TranscriptLanguage
 ): Promise<Word[]> {
-  // Overlap Whisper + Silero downloads; diarizer and language-matched aligner
-  // warm in the background so both are cached by the time the transcript lands.
+  // Overlap Whisper + Silero downloads with the diarizer; the language-matched
+  // aligner warms up further down, once "auto" has been resolved (it needs a
+  // concrete code to pick its CTC model).
   getDiarizer().catch(() => {});
-  if (alignModelFor(transcriptLanguage)) {
-    getAligner(transcriptLanguage).catch(() => {});
-  }
   const [asr, vad] = await Promise.all([getAsr(choice), getVad()]);
   let transcriber = asr;
 
   post({ type: "progress", message: en["progress.detectingSpeech"], value: 0 });
   const { segments: speechSegments, frames: speechFrames } =
     await detectSpeechSegments(audio, vad);
+
+  // Resolve "auto" before anything language-dependent runs: decoding
+  // (asrOptions.language), the aligner warm-up, and refineWordTimestamps all
+  // want a concrete code. Nothing downstream ever sees "auto".
+  let transcriptLanguage = requestedLanguage;
+  if (transcriptLanguage === "auto") {
+    post({
+      type: "progress",
+      message: en["progress.detectingLanguage"],
+      value: 0,
+    });
+    transcriptLanguage = await detectTranscriptLanguage(
+      transcriber,
+      audio,
+      speechSegments
+    );
+    if (alignModelFor(transcriptLanguage)) {
+      getAligner(transcriptLanguage).catch(() => {});
+    }
+  }
 
   const speechSamples = speechSegments.reduce(
     (n, s) => n + (s.endSample - s.startSample),
@@ -1410,7 +1495,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const { audio, duration, model, language } = event.data;
   try {
     const choice: ModelId = model ?? "base";
-    const transcriptLanguage: TranscriptLanguage = language ?? "en";
+    const transcriptLanguage: TranscriptLanguage = language ?? "auto";
 
     let words: Word[];
     if (isParakeetModel(choice)) {

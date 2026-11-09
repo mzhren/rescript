@@ -19,6 +19,7 @@ function assert(cond: boolean, msg: string) {
   assert(alignModelFor("en")?.normalize === "latin-upper", "en stays uppercase");
   assert(alignModelFor(undefined) === null, "missing language → no CTC");
   assert(alignModelFor("xx") === null, "unknown language → no CTC");
+  assert(alignModelFor("auto") === null, "auto language → no CTC until resolved");
 
   const ids = uniqueAlignModelIds();
   assert(ids.length === 3, `expected 3 unique model ids, got ${ids.length}: ${ids}`);

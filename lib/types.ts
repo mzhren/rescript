@@ -102,6 +102,8 @@ export interface WorkerRequest {
   /**
    * Transcript language: conditions Whisper decoding, selects the CTC aligner,
    * and is passed through for Parakeet alignment (Parakeet ASR still auto-detects).
+   * `"auto"` asks the worker to detect the language from the audio itself —
+   * it resolves to a concrete code before decoding and alignment run.
    */
   language: import("./languages").TranscriptLanguage;
 }

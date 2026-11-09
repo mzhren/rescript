@@ -1,4 +1,16 @@
-export type TranscriptLanguage = "en" | "es" | "fr" | "de" | "pt" | "zh";
+/**
+ * `"auto"` lets the ASR model pick the language itself: Whisper detects it from
+ * the first speech segment in the transcription worker, Parakeet detects it
+ * natively. Both resolve to a concrete language before any CTC alignment runs.
+ */
+export type TranscriptLanguage =
+  | "auto"
+  | "en"
+  | "es"
+  | "fr"
+  | "de"
+  | "pt"
+  | "zh";
 
 export interface TranscriptLanguageInfo {
   label: string;
@@ -11,12 +23,18 @@ export interface TranscriptLanguageInfo {
 
 const LANGUAGE_STORAGE_KEY = "rescript.transcript-language";
 
-export const DEFAULT_TRANSCRIPT_LANGUAGE: TranscriptLanguage = "en";
+export const DEFAULT_TRANSCRIPT_LANGUAGE: TranscriptLanguage = "auto";
 
 export const TRANSCRIPT_LANGUAGES: Record<
   TranscriptLanguage,
   TranscriptLanguageInfo
 > = {
+  auto: {
+    label: "Auto",
+    nativeLabel: "Auto",
+    flag: "🌐",
+    code: "AUTO",
+  },
   en: {
     label: "English",
     nativeLabel: "English",
@@ -56,6 +74,7 @@ export const TRANSCRIPT_LANGUAGES: Record<
 };
 
 export const TRANSCRIPT_LANGUAGE_ORDER: TranscriptLanguage[] = [
+  "auto",
   "en",
   "es",
   "fr",
@@ -68,6 +87,7 @@ export function isTranscriptLanguage(
   value: unknown
 ): value is TranscriptLanguage {
   return (
+    value === "auto" ||
     value === "en" ||
     value === "es" ||
     value === "fr" ||

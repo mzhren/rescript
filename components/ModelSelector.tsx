@@ -462,7 +462,7 @@ export function LanguageSection() {
                 {active.flag}
               </span>
               <span className="min-w-0 flex-1 text-[13px] font-medium leading-tight">
-                {active.nativeLabel}
+                {language === "auto" ? t("model.languageAuto") : active.nativeLabel}
               </span>
               <ChevronRight
                 size={14}
@@ -497,7 +497,7 @@ export function LanguageSection() {
                     {option.flag}
                   </span>
                   <span className="min-w-0 flex-1 text-[13px] font-medium leading-tight">
-                    {option.nativeLabel}
+                    {id === "auto" ? t("model.languageAuto") : option.nativeLabel}
                   </span>
                   {selected && (
                     <Check

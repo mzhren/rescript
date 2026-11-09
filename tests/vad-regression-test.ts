@@ -39,8 +39,22 @@ const workerSrc = fs.readFileSync(
 // collapse short VAD segments: Small's longest slice decoded to a bare "Um,",
 // Medium truncated to a fragment, Turbo dropped a leading clause. See the note
 // above MODELS in lib/models.ts for the measurements.
+//
+// Exception: the language auto-detect helper runs a one-shot forward with only
+// the bare <|startoftranscript|> prefix (upstream Whisper's detect_language) —
+// it never conditions transcript decoding. Strip that helper before asserting
+// the transcription path stays prefix-free, and pin its presence so the strip
+// regex can't silently rot.
 assert(
-  !/decoder_input_ids/.test(workerSrc),
+  /async function detectTranscriptLanguage/.test(workerSrc),
+  "expected the language-detection helper to exist"
+);
+const transcriptionSrc = workerSrc.replace(
+  /async function detectTranscriptLanguage[\s\S]*?\n}\n/,
+  ""
+);
+assert(
+  !/decoder_input_ids/.test(transcriptionSrc),
   "worker must not force decoder_input_ids (prefix conditioning truncates VAD segments)"
 );
 console.log("no decoder-prefix conditioning: ok");
